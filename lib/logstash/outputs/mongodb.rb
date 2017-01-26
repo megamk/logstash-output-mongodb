@@ -21,6 +21,9 @@ class LogStash::Outputs::Mongodb < LogStash::Outputs::Base
   # select a collection based on data in the event.
   config :collection, :validate => :string, :required => true
 
+  # If this field is set in the document, then update by id otherwise insert
+  config :updateIfKeyExists, :validate => :string, :required => false
+
   # If true, store the @timestamp field in mongodb as an ISODate type instead
   # of an ISO8601 string.  For more information about this, see
   # http://www.mongodb.org/display/DOCS/Dates
@@ -42,6 +45,7 @@ class LogStash::Outputs::Mongodb < LogStash::Outputs::Base
   end # def register
 
   def receive(event)
+    @collectionObj = @db[event.sprintf(@collection)]
     begin
       # Our timestamp object now has a to_bson method, using it here
       # {}.merge(other) so we don't taint the event hash innards
@@ -53,7 +57,14 @@ class LogStash::Outputs::Mongodb < LogStash::Outputs::Base
       if @generateId
         document["_id"] = BSON::ObjectId.new(nil, event["@timestamp"])
       end
-      @db[event.sprintf(@collection)].insert_one(document)
+      if @updateIfKeyExists && document.has_key?(@updateIfKeyExists)
+        result = @collectionObj.find(:_id => document["_id"]).update_one("$set" => document)
+        if !result.modified_count
+          @collectionObj.insert_one(document)
+        end
+      else
+        @collectionObj.insert_one(document)
+      end
     rescue => e
       @logger.warn("Failed to send event to MongoDB", :event => event, :exception => e,
                    :backtrace => e.backtrace)
